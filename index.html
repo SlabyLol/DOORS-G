@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Doors 2D Edition</title>
+    <style>
+        body { margin: 0; background-color: #111; color: white; font-family: 'Courier New', Courier, monospace; overflow: hidden; user-select: none; }
+        #game-container { position: relative; width: 100vw; height: 100vh; display: flex; justify-content: center; align-items: center; }
+        canvas { background-color: #222; border: 2px solid #555; box-shadow: 0 0 20px #000; }
+        
+        /* UI Overlays */
+        .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(0,0,0,0.9); z-index: 10; }
+        .hidden { display: none !important; }
+        
+        h1 { font-size: 3rem; margin-bottom: 10px; color: #a30000; text-shadow: 2px 2px 5px black; }
+        button { padding: 15px 30px; margin: 10px; font-size: 1.2rem; cursor: pointer; background-color: #333; color: white; border: 2px solid #555; border-radius: 5px; transition: 0.2s; }
+        button:hover { background-color: #555; }
+        
+        /* HUD */
+        #hud { position: absolute; top: 10px; left: 10px; z-index: 5; pointer-events: none; }
+        #room-counter { font-size: 1.5rem; color: white; }
+        #inventory { margin-top: 10px; color: gold; font-weight: bold; }
+        #warning { position: absolute; top: 20%; left: 50%; transform: translateX(-50%); font-size: 2rem; color: red; text-transform: uppercase; animation: flash 0.5s infinite alternate; z-index: 5; }
+        @keyframes flash { from { opacity: 1; } to { opacity: 0; } }
+
+        /* Mobile Controls */
+        #mobile-controls { position: absolute; bottom: 20px; width: 100%; display: flex; justify-content: space-between; padding: 0 40px; box-sizing: border-box; z-index: 5; }
+        .dpad { display: grid; grid-template-columns: 50px 50px 50px; grid-gap: 5px; }
+        .dpad-btn { width: 50px; height: 50px; background: rgba(255,255,255,0.2); border-radius: 10px; border: 1px solid white; display: flex; justify-content: center; align-items: center; font-weight: bold; }
+        #btn-up { grid-column: 2; grid-row: 1; } #btn-left { grid-column: 1; grid-row: 2; } #btn-right { grid-column: 3; grid-row: 2; } #btn-down { grid-column: 2; grid-row: 3; }
+        #action-btn { width: 80px; height: 80px; background: rgba(200,50,50,0.5); border-radius: 50%; border: 2px solid white; align-self: flex-end; display: flex; justify-content: center; align-items: center; font-weight: bold; }
+        
+        #footer { position: absolute; bottom: 5px; width: 100%; text-align: center; font-size: 0.8rem; color: #555; }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="hud" class="hidden">
+            <div id="room-counter">Room: 0001</div>
+            <div id="inventory"></div>
+        </div>
+        <div id="warning" class="hidden">SOMETHING IS COMING... HIDE!</div>
+
+        <canvas id="gameCanvas" width="800" height="600" class="hidden"></canvas>
+
+        <div id="mobile-controls" class="hidden">
+            <div class="dpad">
+                <div class="dpad-btn" id="btn-up">W</div>
+                <div class="dpad-btn" id="btn-left">A</div>
+                <div class="dpad-btn" id="btn-right">D</div>
+                <div class="dpad-btn" id="btn-down">S</div>
+            </div>
+            <div id="action-btn">INTERACT</div>
+        </div>
+
+        <div id="menu-screen" class="screen">
+            <h1>DOORS 2D</h1>
+            <p>Select your device to start</p>
+            <button onclick="startGame('pc')">Play on PC (WASD + E)</button>
+            <button onclick="startGame('mobile')">Play on Mobile (Touch)</button>
+        </div>
+
+        <div id="death-screen" class="screen hidden">
+            <h1>YOU DIED</h1>
+            <p id="death-reason">You were caught by Rush.</p>
+            <button onclick="resetGame()">Try Again</button>
+        </div>
+        
+        <div id="footer">&copy; 2026 DarkFox Co.</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const menuScreen = document.getElementById('menu-screen');
+        const deathScreen = document.getElementById('death-screen');
+        const hud = document.getElementById('hud');
+        const mobileControls = document.getElementById('mobile-controls');
+        const warningTxt = document.getElementById('warning');
+        
+        let gameState = 'menu'; // menu, playing, hiding, dead
+        let isMobile = false;
+        let keys = { w: false, a: false, s: false, d: false, e: false };
+        let animationFrameId;
+
+        // Game Variables
+        let roomNum = 1;
+        let hasKey = false;
+        let roomNeedsKey = false;
+        let monsterActive = false;
+        let monsterTimer = 0;
+
+        const player = { x: 400, y: 500, size: 20, speed: 4, color: 'white' };
+        let door = { x: 350, y: 20, width: 100, height: 20 };
+        let keyObj = { x: 0, y: 0, size: 15, active: false };
+        let closet = { x: 100, y: 100, width: 50, height: 60 };
+
+        // Input Handling
+        window.addEventListener('keydown', (e) => {
+            if(e.key.toLowerCase() === 'w') keys.w = true;
+            if(e.key.toLowerCase() === 'a') keys.a = true;
+            if(e.key.toLowerCase() === 's') keys.s = true;
+            if(e.key.toLowerCase() === 'd') keys.d = true;
+            if(e.key.toLowerCase() === 'e') interact();
+        });
+        window.addEventListener('keyup', (e) => {
+            if(e.key.toLowerCase() === 'w') keys.w = false;
+            if(e.key.toLowerCase() === 'a') keys.a = false;
+            if(e.key.toLowerCase() === 's') keys.s = false;
+            if(e.key.toLowerCase() === 'd') keys.d = false;
+        });
+
+        // Mobile Controls logic
+        const setupMobileControl = (id, key) => {
+            const btn = document.getElementById(id);
+            btn.addEventListener('touchstart', (e) => { e.preventDefault(); keys[key] = true; });
+            btn.addEventListener('touchend', (e) => { e.preventDefault(); keys[key] = false; });
+        };
+        setupMobileControl('btn-up', 'w');
+        setupMobileControl('btn-down', 's');
+        setupMobileControl('btn-left', 'a');
+        setupMobileControl('btn-right', 'd');
+        document.getElementById('action-btn').addEventListener('touchstart', (e) => { e.preventDefault(); interact(); });
+
+        function startGame(mode) {
+            isMobile = (mode === 'mobile');
+            menuScreen.classList.add('hidden');
+            canvas.classList.remove('hidden');
+            hud.classList.remove('hidden');
+            if(isMobile) mobileControls.classList.remove('hidden');
+            
+            resetGame();
+        }
+
+        function resetGame() {
+            gameState = 'playing';
+            roomNum = 1;
+            deathScreen.classList.add('hidden');
+            generateRoom();
+            gameLoop();
+        }
+
+        function generateRoom() {
+            player.x = 400; player.y = 500;
+            hasKey = false;
+            monsterActive = false;
+            warningTxt.classList.add('hidden');
+            document.getElementById('room-counter').innerText = `Room: ${String(roomNum).padStart(4, '0')}`;
+            document.getElementById('inventory').innerText = "";
+
+            // 50% chance room needs a key
+            roomNeedsKey = Math.random() > 0.5 && roomNum > 1;
+            if(roomNeedsKey) {
+                keyObj.x = 100 + Math.random() * 600;
+                keyObj.y = 200 + Math.random() * 300;
+                keyObj.active = true;
+            } else {
+                keyObj.active = false;
+            }
+
+            // Randomize closet position
+            closet.x = 50 + Math.random() * 650;
+            closet.y = 100 + Math.random() * 400;
+
+            // 30% chance for Rush monster event
+            if(Math.random() > 0.7 && roomNum > 2) {
+                triggerMonster();
+            }
+        }
+
+        function triggerMonster() {
+            monsterActive = true;
+            warningTxt.classList.remove('hidden');
+            monsterTimer = setTimeout(() => {
+                if(gameState !== 'hiding') {
+                    die("You didn't hide in time. Rush got you.");
+                } else {
+                    // Survived
+                    monsterActive = false;
+                    warningTxt.classList.add('hidden');
+                }
+            }, 4000); // 4 seconds to hide
+        }
+
+        function interact() {
+            if(gameState === 'hiding') {
+                gameState = 'playing'; // Leave closet
+                player.color = 'white';
+                return;
+            }
+
+            // Check Closet
+            if(Math.abs(player.x - (closet.x + closet.width/2)) < 40 && Math.abs(player.y - (closet.y + closet.height/2)) < 40) {
+                gameState = 'hiding';
+                player.color = 'rgba(255,255,255,0.2)'; // fade out slightly
+                player.x = closet.x + closet.width/2 - player.size/2;
+                player.y = closet.y + closet.height/2 - player.size/2;
+            }
+        }
+
+        function die(reason) {
+            gameState = 'dead';
+            clearTimeout(monsterTimer);
+            document.getElementById('death-reason').innerText = reason;
+            deathScreen.classList.remove('hidden');
+            canvas.classList.add('hidden');
+            hud.classList.add('hidden');
+            mobileControls.classList.add('hidden');
+            cancelAnimationFrame(animationFrameId);
+        }
+
+        function update() {
+            if(gameState !== 'playing') return;
+
+            // Movement
+            if(keys.w && player.y > 0) player.y -= player.speed;
+            if(keys.s && player.y < canvas.height - player.size) player.y += player.speed;
+            if(keys.a && player.x > 0) player.x -= player.speed;
+            if(keys.d && player.x < canvas.width - player.size) player.x += player.speed;
+
+            // Check Key Collision
+            if(keyObj.active) {
+                if(player.x < keyObj.x + keyObj.size && player.x + player.size > keyObj.x &&
+                   player.y < keyObj.y + keyObj.size && player.y + player.size > keyObj.y) {
+                    hasKey = true;
+                    keyObj.active = false;
+                    document.getElementById('inventory').innerText = "Item: Key";
+                }
+            }
+
+            // Check Door Collision
+            if(player.y < door.y + door.height && player.x + player.size > door.x && player.x < door.x + door.width) {
+                if(!roomNeedsKey || hasKey) {
+                    roomNum++;
+                    generateRoom();
+                } else {
+                    // Push back slightly if locked
+                    player.y += 5; 
+                }
+            }
+        }
+
+        function draw() {
+            // Clear Canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Door
+            ctx.fillStyle = (roomNeedsKey && !hasKey) ? '#8b0000' : '#8b4513';
+            ctx.fillRect(door.x, door.y, door.width, door.height);
+            ctx.fillStyle = 'black';
+            ctx.font = '16px Courier';
+            ctx.fillText(String(roomNum).padStart(4, '0'), door.x + 25, door.y + 15);
+
+            // Draw Closet
+            ctx.fillStyle = '#444';
+            ctx.fillRect(closet.x, closet.y, closet.width, closet.height);
+            ctx.strokeStyle = 'black';
+            ctx.strokeRect(closet.x + closet.width/2, closet.y, 1, closet.height);
+
+            // Draw Key
+            if(keyObj.active) {
+                ctx.fillStyle = 'gold';
+                ctx.fillRect(keyObj.x, keyObj.y, keyObj.size, keyObj.size);
+            }
+
+            // Draw Player
+            ctx.fillStyle = player.color;
+            ctx.fillRect(player.x, player.y, player.size, player.size);
+        }
+
+        function gameLoop() {
+            if(gameState === 'dead') return;
+            update();
+            draw();
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+    </script>
+</body>
+</html>
